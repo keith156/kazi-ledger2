@@ -1,11 +1,10 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Sparkles, ArrowRight, X, Check, Loader2, ScanLine, Camera, RefreshCcw, Mic, MicOff } from 'lucide-react';
-import { parseNaturalLanguage, analyzeReceipt } from '../geminiService';
-import { AIResponse, Transaction } from '../types';
+import { parseNaturalLanguage, analyzeReceipt } from '../geminiService.ts';
+import { AIResponse, Transaction } from '../types.ts';
 
 interface CommandBarProps {
-  // Fix: Omit account_id from the record payload as it's handled by the parent component/database
   onRecord: (tx: Omit<Transaction, "id" | "user_id" | "account_id">) => void;
   context: string;
 }

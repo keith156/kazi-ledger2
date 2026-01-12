@@ -1,9 +1,11 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { AIResponse, TransactionType } from "./types";
+import { AIResponse, TransactionType } from "./types.ts";
 
-// Fix: Use process.env.API_KEY directly in the named parameter object as required
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const getApiKey = () => (window as any).process?.env?.API_KEY || '';
+
+// Initialize AI with defensive key access
+const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
 const responseSchema = {
   type: Type.OBJECT,
@@ -52,11 +54,10 @@ export const parseNaturalLanguage = async (input: string, context: string): Prom
       config: {
         responseMimeType: "application/json",
         responseSchema: responseSchema,
-        thinkingConfig: { thinkingBudget: 0 } // Disable thinking for max speed
+        thinkingConfig: { thinkingBudget: 0 }
       },
     });
 
-    // Fix: use .text property directly, not as a method call
     return JSON.parse(response.text || "{}") as AIResponse;
   } catch (error) {
     console.error("AI Parsing Error:", error);
@@ -78,7 +79,6 @@ export const analyzeReceipt = async (base64Image: string): Promise<AIResponse> =
   try {
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
-      // Fix: Follow the correct parts structure for multimodal inputs
       contents: {
         parts: [
           {
@@ -93,11 +93,10 @@ export const analyzeReceipt = async (base64Image: string): Promise<AIResponse> =
       config: {
         responseMimeType: "application/json",
         responseSchema: responseSchema,
-        thinkingConfig: { thinkingBudget: 0 } // Speed-optimized
+        thinkingConfig: { thinkingBudget: 0 }
       },
     });
 
-    // Fix: use .text property directly
     return JSON.parse(response.text || "{}") as AIResponse;
   } catch (error) {
     console.error("Vision Analysis Error:", error);
@@ -123,11 +122,10 @@ export const generateInsights = async (context: string): Promise<string[]> => {
           type: Type.ARRAY,
           items: { type: Type.STRING }
         },
-        thinkingConfig: { thinkingBudget: 0 } // Speed-optimized
+        thinkingConfig: { thinkingBudget: 0 }
       },
     });
 
-    // Fix: use .text property directly
     return JSON.parse(response.text || "[]") as string[];
   } catch (error) {
     return ["Daily sales help growth.", "Track debt consistently.", "Monitor your weekly totals."];

@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { supabase, isSupabaseConfigured } from '../supabase';
+import { supabase, isSupabaseConfigured } from '../supabase.ts';
 import { Mail, Lock, ArrowRight, Loader2, Sparkles, ShieldCheck, AlertCircle } from 'lucide-react';
 
 export const Auth: React.FC = () => {

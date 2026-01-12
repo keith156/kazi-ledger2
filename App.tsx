@@ -1,15 +1,15 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { db } from './db';
-import { supabase, isSupabaseConfigured } from './supabase';
-import { Transaction, Profile, TransactionType, BusinessAccount } from './types';
-import { BentoGrid } from './components/BentoGrid';
-import { HistoryList } from './components/HistoryList';
-import { CommandBar } from './components/CommandBar';
-import { AIInsights } from './components/AIInsights';
-import { LandingPage } from './components/LandingPage';
-import { Auth } from './components/Auth';
-import { generateInsights } from './geminiService';
+import { db } from './db.ts';
+import { supabase, isSupabaseConfigured } from './supabase.ts';
+import { Transaction, Profile, TransactionType, BusinessAccount } from './types.ts';
+import { BentoGrid } from './components/BentoGrid.tsx';
+import { HistoryList } from './components/HistoryList.tsx';
+import { CommandBar } from './components/CommandBar.tsx';
+import { AIInsights } from './components/AIInsights.tsx';
+import { LandingPage } from './components/LandingPage.tsx';
+import { Auth } from './components/Auth.tsx';
+import { generateInsights } from './geminiService.ts';
 import { Settings, BarChart3, LayoutDashboard, Search, ChevronDown, Plus, X, Building2, Save, Trash2, Info, LogOut, AlertTriangle, RefreshCcw, Loader2 } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -43,10 +43,18 @@ const App: React.FC = () => {
   const [editCurrency, setEditCurrency] = useState(currentAccount.currency);
 
   useEffect(() => {
+    if (!supabase) {
+        setAuthChecking(false);
+        return;
+    }
+
     // Initial session check
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setAuthChecking(false);
+    }).catch(err => {
+        console.error("Auth session error:", err);
+        setAuthChecking(false);
     });
 
     // Listen for auth changes
