@@ -1,0 +1,8 @@
+{
+  "name": "Kazi Ledger",
+  "description": "A mobile-first, AI-powered accounting application for small business owners. Record transactions using natural language, track debts, and visualize business health with a modern Bento-style dashboard.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
