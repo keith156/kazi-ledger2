@@ -1,64 +1,17 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
-import { AIResponse, TransactionType } from "./types.ts";
-
-const getApiKey = () => (window as any).process?.env?.API_KEY || '';
-
-// Initialize AI with defensive key access
-const ai = new GoogleGenAI({ apiKey: getApiKey() });
-
-const responseSchema = {
-  type: Type.OBJECT,
-  properties: {
-    intent: {
-      type: Type.STRING,
-      description: "RECORD for adding a transaction, QUERY for asking about history.",
-    },
-    transaction: {
-      type: Type.OBJECT,
-      properties: {
-        type: { type: Type.STRING, description: "INCOME, EXPENSE, DEBT, or DEBT_PAYMENT" },
-        amount: { type: Type.NUMBER },
-        category: { type: Type.STRING },
-        counterparty: { type: Type.STRING },
-        description: { type: Type.STRING },
-      },
-    },
-    query_answer: {
-      type: Type.STRING,
-      description: "The answer if the user is asking a question.",
-    },
-  },
-  required: ["intent"],
-};
+import { AIResponse } from "./types.ts";
 
 export const parseNaturalLanguage = async (input: string, context: string): Promise<AIResponse> => {
-  const prompt = `
-    Kazi Ledger Fast Mode: Analyze "${input}".
-    Context: ${context}
-    
-    If RECORD:
-    - INCOME: "Sold 3 sodas for 5000" -> 5000, "Sales", "Customer"
-    - EXPENSE: "Paid 10000 for rent" -> 10000, "Rent"
-    - DEBT: "Lent 2000 to John" -> 2000, DEBT, "John"
-    - DEBT_PAYMENT: "John paid 500" -> 500, DEBT_PAYMENT, "John"
-
-    If QUERY: Answer directly based on context.
-    Return structured JSON.
-  `;
-
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: responseSchema,
-        thinkingConfig: { thinkingBudget: 0 }
-      },
+    const response = await fetch("/api/gemini/parse", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ input, context }),
     });
-
-    return JSON.parse(response.text || "{}") as AIResponse;
+    if (!response.ok) {
+      throw new Error("Failed to parse natural language");
+    }
+    return await response.json();
   } catch (error) {
     console.error("AI Parsing Error:", error);
     throw error;
@@ -66,38 +19,16 @@ export const parseNaturalLanguage = async (input: string, context: string): Prom
 };
 
 export const analyzeReceipt = async (base64Image: string): Promise<AIResponse> => {
-  const prompt = `
-    Analyze receipt. Extract:
-    - Type (EXPENSE/INCOME)
-    - Total Amount
-    - Category
-    - Merchant/Counterparty
-    - Brief description
-    Return JSON.
-  `;
-
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType: "image/jpeg",
-              data: base64Image,
-            },
-          },
-          { text: prompt },
-        ],
-      },
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: responseSchema,
-        thinkingConfig: { thinkingBudget: 0 }
-      },
+    const response = await fetch("/api/gemini/analyzeReceipt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ base64Image }),
     });
-
-    return JSON.parse(response.text || "{}") as AIResponse;
+    if (!response.ok) {
+      throw new Error("Failed to analyze receipt");
+    }
+    return await response.json();
   } catch (error) {
     console.error("Vision Analysis Error:", error);
     throw error;
@@ -105,28 +36,16 @@ export const analyzeReceipt = async (base64Image: string): Promise<AIResponse> =
 };
 
 export const generateInsights = async (context: string): Promise<string[]> => {
-  const prompt = `
-    Analyze: "${context}"
-    Provide 3 business insights. 
-    EXACTLY 5 WORDS OR LESS EACH.
-    Format as JSON array of strings.
-  `;
-
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: { type: Type.STRING }
-        },
-        thinkingConfig: { thinkingBudget: 0 }
-      },
+    const response = await fetch("/api/gemini/insights", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ context }),
     });
-
-    return JSON.parse(response.text || "[]") as string[];
+    if (!response.ok) {
+      throw new Error("Failed to generate insights");
+    }
+    return await response.json();
   } catch (error) {
     return ["Daily sales help growth.", "Track debt consistently.", "Monitor your weekly totals."];
   }
