@@ -1,0 +1,63 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile containing default settings.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "business_name": { "type": "string" },
+        "currency": { "type": "string" },
+        "active_account_id": { "type": "string" },
+        "createdAt": { "type": "string", "description": "timestamp" },
+        "updatedAt": { "type": "string", "description": "timestamp" }
+      },
+      "required": ["userId", "business_name", "currency", "createdAt", "updatedAt"]
+    },
+    "BusinessAccount": {
+      "title": "BusinessAccount",
+      "description": "A ledger account for a business.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string" },
+        "name": { "type": "string" },
+        "currency": { "type": "string" },
+        "createdAt": { "type": "string", "description": "timestamp" },
+        "updatedAt": { "type": "string", "description": "timestamp" }
+      },
+      "required": ["ownerId", "name", "currency", "createdAt", "updatedAt"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "A financial transaction in a business ledger.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string" },
+        "accountId": { "type": "string" },
+        "type": { "type": "string", "enum": ["INCOME", "EXPENSE", "DEBT", "DEBT_PAYMENT"] },
+        "amount": { "type": "number" },
+        "category": { "type": "string" },
+        "counterparty": { "type": "string" },
+        "description": { "type": "string" },
+        "date": { "type": "string" },
+        "createdAt": { "type": "string", "description": "timestamp" },
+        "updatedAt": { "type": "string", "description": "timestamp" }
+      },
+      "required": ["ownerId", "accountId", "type", "amount", "category", "counterparty", "description", "date", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "The user's profile information."
+    },
+    "/accounts/{accountId}": {
+      "schema": { "$ref": "#/entities/BusinessAccount" },
+      "description": "The user's business ledger accounts."
+    },
+    "/accounts/{accountId}/transactions/{transactionId}": {
+       "schema": { "$ref": "#/entities/Transaction" },
+       "description": "Transactions for a specific business ledger account."
+    }
+  }
+}

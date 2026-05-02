@@ -1,98 +1,172 @@
 
+import { auth, db as firestore, handleFirestoreError, OperationType } from './firebase';
+import { collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, query, where, orderBy, onSnapshot, serverTimestamp } from "firebase/firestore";
 import { Transaction, Profile, TransactionType, BusinessAccount } from "./types";
 
-const STORAGE_KEY_TRANSACTIONS = "kazi_transactions_v2";
-const STORAGE_KEY_ACCOUNTS = "kazi_accounts";
-const STORAGE_KEY_PROFILE = "kazi_profile_v2";
+const generateId = () => crypto.randomUUID();
 
-const DEFAULT_ACCOUNTS: BusinessAccount[] = [
-  { id: "default-1", name: "My Business", currency: "UGX", created_at: new Date().toISOString() }
-];
+export const dbInit = async () => {
+    // Basic connectivity check handled by firebase initialization
+};
 
 export const db = {
-  getAccounts: (): BusinessAccount[] => {
-    const data = localStorage.getItem(STORAGE_KEY_ACCOUNTS);
-    return data ? JSON.parse(data) : DEFAULT_ACCOUNTS;
+  getAccounts: async (userId: string): Promise<BusinessAccount[]> => {
+    try {
+      const q = query(collection(firestore, 'accounts'), where('ownerId', '==', userId));
+      const snapshot = await getDocs(q);
+      const accounts: BusinessAccount[] = [];
+      snapshot.forEach(doc => {
+        accounts.push({ id: doc.id, ...doc.data() } as BusinessAccount);
+      });
+      return accounts;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.LIST, 'accounts');
+      return [];
+    }
   },
 
-  saveAccount: (account: Omit<BusinessAccount, "id" | "created_at">): BusinessAccount => {
-    const accounts = db.getAccounts();
-    const newAcc: BusinessAccount = {
-      ...account,
-      id: crypto.randomUUID(),
-      created_at: new Date().toISOString(),
-    };
-    accounts.push(newAcc);
-    localStorage.setItem(STORAGE_KEY_ACCOUNTS, JSON.stringify(accounts));
-    return newAcc;
+  subscribeToAccounts: (userId: string, callback: (accounts: BusinessAccount[]) => void) => {
+    const q = query(collection(firestore, 'accounts'), where('ownerId', '==', userId));
+    return onSnapshot(q, (snapshot) => {
+      const accounts: BusinessAccount[] = [];
+      snapshot.forEach(doc => accounts.push({ id: doc.id, ...doc.data() } as BusinessAccount));
+      callback(accounts);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'accounts');
+    });
   },
 
-  updateAccount: (id: string, data: Partial<Omit<BusinessAccount, "id" | "created_at">>): BusinessAccount => {
-    const accounts = db.getAccounts();
-    const index = accounts.findIndex(a => a.id === id);
-    if (index === -1) throw new Error("Account not found");
-    
-    accounts[index] = { ...accounts[index], ...data };
-    localStorage.setItem(STORAGE_KEY_ACCOUNTS, JSON.stringify(accounts));
-    return accounts[index];
+  saveAccount: async (account: Omit<BusinessAccount, "id" | "created_at">, userId: string): Promise<BusinessAccount> => {
+    try {
+      const id = generateId();
+      const newAcc = {
+        ownerId: userId,
+        name: account.name,
+        currency: account.currency,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+      await setDoc(doc(firestore, 'accounts', id), newAcc);
+      return { id, created_at: new Date().toISOString(), name: account.name, currency: account.currency };
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `accounts`);
+      throw error;
+    }
   },
 
-  deleteAccount: (id: string) => {
-    const accounts = db.getAccounts();
-    if (accounts.length <= 1) throw new Error("Cannot delete the only remaining account");
-    const filtered = accounts.filter(a => a.id !== id);
-    localStorage.setItem(STORAGE_KEY_ACCOUNTS, JSON.stringify(filtered));
-    
-    // Also cleanup transactions for this account
-    db.clearTransactions(id);
-    return filtered[0];
+  updateAccount: async (id: string, data: Partial<Omit<BusinessAccount, "id" | "created_at">>, userId: string): Promise<void> => {
+    try {
+      await updateDoc(doc(firestore, 'accounts', id), {
+        name: data.name,
+        currency: data.currency,
+        updatedAt: serverTimestamp()
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `accounts/${id}`);
+      throw error;
+    }
   },
 
-  getTransactions: (accountId: string): Transaction[] => {
-    const data = localStorage.getItem(STORAGE_KEY_TRANSACTIONS);
-    const allTxs: Transaction[] = data ? JSON.parse(data) : [];
-    return allTxs.filter(t => t.account_id === accountId);
+  deleteAccount: async (id: string): Promise<void> => {
+    try {
+      await deleteDoc(doc(firestore, 'accounts', id));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `accounts/${id}`);
+      throw error;
+    }
   },
 
-  clearTransactions: (accountId: string) => {
-    const data = localStorage.getItem(STORAGE_KEY_TRANSACTIONS);
-    const allTxs: Transaction[] = data ? JSON.parse(data) : [];
-    const filtered = allTxs.filter(t => t.account_id !== accountId);
-    localStorage.setItem(STORAGE_KEY_TRANSACTIONS, JSON.stringify(filtered));
+  subscribeToTransactions: (accountId: string, userId: string, callback: (txs: Transaction[]) => void) => {
+    const q = Object.keys(firestore).length ? query(collection(firestore, `accounts/${accountId}/transactions`), where('ownerId', '==', userId)) : null;
+    if (!q) return () => {};
+    return onSnapshot(q, (snapshot) => {
+      const txs: Transaction[] = [];
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        txs.push({ ...data, id: doc.id } as Transaction);
+      });
+      // Sort by date desc locally since we can't do complex querying easily without index
+      txs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      callback(txs);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, `accounts/${accountId}/transactions`);
+    });
   },
 
-  saveTransaction: (transaction: Omit<Transaction, "id" | "user_id" | "account_id">, accountId: string, userId: string = "demo-user"): Transaction => {
-    const data = localStorage.getItem(STORAGE_KEY_TRANSACTIONS);
-    const allTxs: Transaction[] = data ? JSON.parse(data) : [];
-    const newTx: Transaction = {
-      ...transaction,
-      id: crypto.randomUUID(),
-      user_id: userId,
-      account_id: accountId,
-    };
-    allTxs.unshift(newTx);
-    localStorage.setItem(STORAGE_KEY_TRANSACTIONS, JSON.stringify(allTxs));
-    return newTx;
+  saveTransaction: async (transaction: Omit<Transaction, "id" | "user_id" | "account_id">, accountId: string, userId: string): Promise<void> => {
+    try {
+      const id = generateId();
+      const newTx = {
+        ownerId: userId,
+        accountId: accountId,
+        type: transaction.type,
+        amount: transaction.amount,
+        category: transaction.category,
+        counterparty: transaction.counterparty,
+        description: transaction.description,
+        date: transaction.date,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      };
+      await setDoc(doc(firestore, `accounts/${accountId}/transactions`, id), newTx);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `accounts/${accountId}/transactions`);
+      throw error;
+    }
   },
 
-  getProfile: (): Profile => {
-    const data = localStorage.getItem(STORAGE_KEY_PROFILE);
-    const accounts = db.getAccounts();
-    const defaultProfile = { 
-      id: "1", 
-      business_name: accounts[0].name, 
-      currency: accounts[0].currency,
-      active_account_id: accounts[0].id
-    };
-    return data ? JSON.parse(data) : defaultProfile;
+  getProfile: async (userId: string): Promise<Profile | null> => {
+    try {
+      const docRef = doc(firestore, 'users', userId);
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        return {
+          id: userId,
+          business_name: data.business_name,
+          currency: data.currency,
+          active_account_id: data.active_account_id
+        };
+      }
+      return null;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.GET, `users/${userId}`);
+      return null;
+    }
   },
 
-  updateProfile: (profile: Profile) => {
-    localStorage.setItem(STORAGE_KEY_PROFILE, JSON.stringify(profile));
+  saveProfile: async (profile: Profile, userId: string): Promise<void> => {
+      try {
+          const newProf = {
+            userId: userId,
+            business_name: profile.business_name,
+            currency: profile.currency,
+            active_account_id: profile.active_account_id,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+          };
+          await setDoc(doc(firestore, 'users', userId), newProf);
+      } catch (error) {
+          handleFirestoreError(error, OperationType.CREATE, `users/${userId}`);
+          throw error;
+      }
   },
 
-  getStats: (accountId: string, timeframe: 'today' | 'weekly' | 'monthly' = 'today') => {
-    const txs = db.getTransactions(accountId);
+  updateProfile: async (profile: Profile, userId: string): Promise<void> => {
+    try {
+      await updateDoc(doc(firestore, 'users', userId), {
+        business_name: profile.business_name,
+        currency: profile.currency,
+        active_account_id: profile.active_account_id,
+        updatedAt: serverTimestamp()
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${userId}`);
+      throw error;
+    }
+  },
+
+  getStats: (txs: Transaction[], timeframe: 'today' | 'weekly' | 'monthly' = 'today') => {
     const now = new Date();
     
     const isToday = (dateStr: string) => {

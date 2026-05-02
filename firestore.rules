@@ -1,0 +1,121 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Primitives
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isSignedIn() { return request.auth != null; }
+    function isVerified() { return isSignedIn() && request.auth.token.email_verified == true; }
+    
+    function isValidId(id) { 
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); 
+    }
+
+    function isTimestamp() {
+      return request.time;
+    }
+
+    // Validations
+    function isValidUser(data) {
+      return data.keys().hasAll(['userId', 'business_name', 'currency', 'createdAt', 'updatedAt']) 
+        && data.keys().size() <= 6
+        && data.userId is string && data.userId.size() <= 128 && data.userId == request.auth.uid
+        && data.business_name is string && data.business_name.size() <= 200
+        && data.currency is string && data.currency.size() <= 10
+        && (data.get('active_account_id', '') is string) && (data.get('active_account_id', '').size() <= 128)
+        && data.createdAt == request.time
+        && data.updatedAt == request.time;
+    }
+    
+    function isValidUserUpdate(data) {
+       return data.keys().hasAll(['userId', 'business_name', 'currency', 'createdAt', 'updatedAt']) 
+        && data.keys().size() <= 6
+        && data.userId == request.auth.uid
+        && data.business_name is string && data.business_name.size() <= 200
+        && data.currency is string && data.currency.size() <= 10
+        && (data.get('active_account_id', '') is string) && (data.get('active_account_id', '').size() <= 128)
+        && data.createdAt == existing().createdAt
+        && data.updatedAt == request.time;
+    }
+
+    function isValidBusinessAccount(data) {
+      return data.keys().hasAll(['ownerId', 'name', 'currency', 'createdAt', 'updatedAt']) 
+        && data.keys().size() == 5
+        && data.ownerId is string && data.ownerId.size() <= 128 && data.ownerId == request.auth.uid
+        && data.name is string && data.name.size() <= 200
+        && data.currency is string && data.currency.size() <= 10
+        && data.createdAt == request.time
+        && data.updatedAt == request.time;
+    }
+    
+    function isValidBusinessAccountUpdate(data) {
+       return data.keys().hasAll(['ownerId', 'name', 'currency', 'createdAt', 'updatedAt']) 
+        && data.keys().size() == 5
+        && data.ownerId == request.auth.uid
+        && data.name is string && data.name.size() <= 200
+        && data.currency is string && data.currency.size() <= 10
+        && data.createdAt == existing().createdAt
+        && data.updatedAt == request.time;
+    }
+
+    function isValidTransaction(data, expectedAccountId) {
+      return data.keys().hasAll(['ownerId', 'accountId', 'type', 'amount', 'category', 'counterparty', 'description', 'date', 'createdAt', 'updatedAt']) 
+        && data.keys().size() == 10
+        && data.ownerId is string && data.ownerId.size() <= 128 && data.ownerId == request.auth.uid
+        && data.accountId is string && data.accountId.size() <= 128 && data.accountId == expectedAccountId
+        && data.type is string && data.type.size() <= 30 && data.type in ['INCOME', 'EXPENSE', 'DEBT', 'DEBT_PAYMENT']
+        && data.amount is number
+        && data.category is string && data.category.size() <= 100
+        && data.counterparty is string && data.counterparty.size() <= 200
+        && data.description is string && data.description.size() <= 500
+        && data.date is string && data.date.size() <= 50
+        && data.createdAt == request.time
+        && data.updatedAt == request.time;
+    }
+
+    match /users/{userId} {
+      allow get: if isVerified() && isValidId(userId) && request.auth.uid == userId;
+      allow list: if false; // No blanket reads across users
+      allow create: if isVerified() && isValidId(userId) && request.auth.uid == userId
+                    && isValidUser(incoming());
+      allow update: if isVerified() && isValidId(userId) && request.auth.uid == userId
+                    && isValidUserUpdate(incoming())
+                    && incoming().diff(existing()).affectedKeys().hasOnly(['business_name', 'currency', 'active_account_id', 'updatedAt'])
+                    && incoming().userId == existing().userId
+                    && incoming().createdAt == existing().createdAt;
+      allow delete: if false;
+    }
+
+    match /accounts/{accountId} {
+      allow get: if isVerified() && isValidId(accountId) && existing().ownerId == request.auth.uid;
+      allow list: if isVerified() && resource.data.ownerId == request.auth.uid;
+      allow create: if isVerified() && isValidId(accountId) 
+                    && isValidBusinessAccount(incoming());
+      allow update: if isVerified() && isValidId(accountId) 
+                    && existing().ownerId == request.auth.uid
+                    && isValidBusinessAccountUpdate(incoming())
+                    && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'currency', 'updatedAt'])
+                    && incoming().ownerId == existing().ownerId
+                    && incoming().createdAt == existing().createdAt;
+      allow delete: if isVerified() && isValidId(accountId) && existing().ownerId == request.auth.uid;
+      
+      match /transactions/{transactionId} {
+        allow get: if isVerified() && isValidId(accountId) && isValidId(transactionId) && existing().ownerId == request.auth.uid;
+        allow list: if isVerified() && isValidId(accountId) && resource.data.ownerId == request.auth.uid;
+        allow create: if isVerified() && isValidId(accountId) && isValidId(transactionId)
+                      && isValidTransaction(incoming(), accountId)
+                      && get(/databases/$(database)/documents/accounts/$(accountId)).data.ownerId == request.auth.uid;
+        allow update: if false; // Transactions are immutable, they can only be deleted and recreated, or created
+        allow delete: if isVerified() && isValidId(accountId) && isValidId(transactionId) 
+                      && existing().ownerId == request.auth.uid;
+      }
+    }
+  }
+}

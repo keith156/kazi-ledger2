@@ -1,7 +1,7 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from './db.ts';
-import { supabase, isSupabaseConfigured } from './supabase.ts';
+import { auth } from './firebase.ts';
+import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import { Transaction, Profile, TransactionType, BusinessAccount } from './types.ts';
 import { BentoGrid } from './components/BentoGrid.tsx';
 import { HistoryList } from './components/HistoryList.tsx';
@@ -13,22 +13,25 @@ import { generateInsights } from './geminiService.ts';
 import { Settings, BarChart3, LayoutDashboard, Search, ChevronDown, Plus, X, Building2, Save, Trash2, Info, LogOut, AlertTriangle, RefreshCcw, Loader2 } from 'lucide-react';
 
 const App: React.FC = () => {
-  const [session, setSession] = useState<any>(null);
+  const [sessionUser, setSessionUser] = useState<User | null>(null);
   const [authChecking, setAuthChecking] = useState(true);
   
   const [hasStarted, setHasStarted] = useState(() => {
     return localStorage.getItem('kazi_has_started') === 'true';
   });
   
-  const [accounts, setAccounts] = useState<BusinessAccount[]>(db.getAccounts());
-  const [profile, setProfile] = useState<Profile>(db.getProfile());
-  const [currentAccount, setCurrentAccount] = useState<BusinessAccount>(
-    accounts.find(a => a.id === profile.active_account_id) || accounts[0]
-  );
+  const [accounts, setAccounts] = useState<BusinessAccount[]>([]);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [currentAccount, setCurrentAccount] = useState<BusinessAccount | null>(null);
+  const [loadingData, setLoadingData] = useState(false);
   
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [timeframe, setTimeframe] = useState<'today' | 'weekly' | 'monthly'>('today');
-  const [stats, setStats] = useState(db.getStats(currentAccount.id, timeframe));
+  
+  const stats = useMemo(() => {
+     return db.getStats(transactions, timeframe);
+  }, [transactions, timeframe]);
+
   const [view, setView] = useState<'dashboard' | 'debts'>('dashboard');
   const [insights, setInsights] = useState<string[]>([]);
   const [loadingInsights, setLoadingInsights] = useState(false);
@@ -39,44 +42,84 @@ const App: React.FC = () => {
   const [newAccountName, setNewAccountName] = useState("");
   const [newAccountCurrency, setNewAccountCurrency] = useState("UGX");
 
-  const [editName, setEditName] = useState(currentAccount.name);
-  const [editCurrency, setEditCurrency] = useState(currentAccount.currency);
+  const [editName, setEditName] = useState("");
+  const [editCurrency, setEditCurrency] = useState("");
 
   useEffect(() => {
-    if (!supabase) {
-        setAuthChecking(false);
-        return;
-    }
-
-    // Initial session check
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      setSessionUser(user);
       setAuthChecking(false);
-    }).catch(err => {
-        console.error("Auth session error:", err);
-        setAuthChecking(false);
+      
+      if (user && hasStarted) {
+        setLoadingData(true);
+        try {
+            let prof = await db.getProfile(user.uid);
+            let accs = await db.getAccounts(user.uid);
+            
+            if (!prof || accs.length === 0) {
+               // First time setup
+               const newAcc = await db.saveAccount({ name: "My Business", currency: "UGX" }, user.uid);
+               accs = [newAcc];
+               prof = {
+                 id: user.uid,
+                 business_name: newAcc.name,
+                 currency: newAcc.currency,
+                 active_account_id: newAcc.id
+               };
+               await db.saveProfile(prof, user.uid);
+            }
+            
+            setProfile(prof);
+            setAccounts(accs);
+            
+            const activeAcc = accs.find(a => a.id === prof?.active_account_id) || accs[0];
+            setCurrentAccount(activeAcc);
+            setEditName(activeAcc.name);
+            setEditCurrency(activeAcc.currency);
+        } catch (e) {
+            console.error("Error loading account data", e);
+        } finally {
+            setLoadingData(false);
+        }
+      } else {
+        setAccounts([]);
+        setProfile(null);
+        setCurrentAccount(null);
+      }
     });
 
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
+    return () => unsub();
+  }, [hasStarted]);
 
   useEffect(() => {
-    if (!hasStarted || !session) return;
-    const txs = db.getTransactions(currentAccount.id);
-    setTransactions(txs);
-    setStats(db.getStats(currentAccount.id, timeframe));
-    setEditName(currentAccount.name);
-    setEditCurrency(currentAccount.currency);
-  }, [currentAccount, timeframe, hasStarted, session]);
+    if (!sessionUser || !currentAccount) return;
+    
+    const unsub = db.subscribeToTransactions(currentAccount.id, sessionUser.uid, (txs) => {
+        setTransactions(txs);
+    });
+    
+    return () => unsub();
+  }, [sessionUser, currentAccount]);
+  
+  useEffect(() => {
+      if (!sessionUser) return;
+      const unsub = db.subscribeToAccounts(sessionUser.uid, (accs) => {
+          setAccounts(accs);
+          if (profile && currentAccount) {
+              const updatedAcc = accs.find(a => a.id === currentAccount.id);
+              if (updatedAcc) {
+                  setCurrentAccount(updatedAcc);
+                  setEditName(updatedAcc.name);
+                  setEditCurrency(updatedAcc.currency);
+              }
+          }
+      });
+      return () => unsub();
+  }, [sessionUser, profile]);
 
   useEffect(() => {
     const fetchInsights = async () => {
-      if (!hasStarted || !session || transactions.length === 0) {
+      if (!hasStarted || !sessionUser || !currentAccount || transactions.length === 0) {
         setInsights([]);
         return;
       }
@@ -92,7 +135,7 @@ const App: React.FC = () => {
 
     const timeoutId = setTimeout(fetchInsights, 500);
     return () => clearTimeout(timeoutId);
-  }, [transactions.length, timeframe, currentAccount.id, hasStarted, session]);
+  }, [transactions.length, timeframe, currentAccount?.id, hasStarted, sessionUser]);
 
   const handleStart = () => {
     setHasStarted(true);
@@ -100,69 +143,59 @@ const App: React.FC = () => {
   };
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
+    await signOut(auth);
     setIsSettingsOpen(false);
   };
 
-  const handleNewRecord = (txData: Omit<Transaction, "id" | "user_id" | "account_id">) => {
-    db.saveTransaction(txData, currentAccount.id, session?.user?.id || "demo-user");
-    const updatedTxs = db.getTransactions(currentAccount.id);
-    setTransactions(updatedTxs);
-    setStats(db.getStats(currentAccount.id, timeframe));
+  const handleNewRecord = async (txData: Omit<Transaction, "id" | "user_id" | "account_id">) => {
+    if (!currentAccount || !sessionUser) return;
+    await db.saveTransaction(txData, currentAccount.id, sessionUser.uid);
   };
 
-  const switchAccount = (account: BusinessAccount) => {
+  const switchAccount = async (account: BusinessAccount) => {
+    if (!sessionUser || !profile) return;
     setCurrentAccount(account);
-    setProfile(prev => {
-      const updated = { ...prev, active_account_id: account.id };
-      db.updateProfile(updated);
-      return updated;
-    });
+    const updated = { ...profile, active_account_id: account.id };
+    setProfile(updated);
+    await db.updateProfile(updated, sessionUser.uid);
     setIsAccountMenuOpen(false);
   };
 
-  const createNewAccount = (e: React.FormEvent) => {
+  const createNewAccount = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newAccountName.trim()) return;
+    if (!newAccountName.trim() || !sessionUser) return;
     
-    const newAcc = db.saveAccount({ name: newAccountName, currency: newAccountCurrency });
-    setAccounts(db.getAccounts());
+    const newAcc = await db.saveAccount({ name: newAccountName, currency: newAccountCurrency }, sessionUser.uid);
     switchAccount(newAcc);
     setIsAddingAccount(false);
     setNewAccountName("");
   };
 
-  const handleUpdateAccount = (e: React.FormEvent) => {
+  const handleUpdateAccount = async (e: React.FormEvent) => {
     e.preventDefault();
-    const updated = db.updateAccount(currentAccount.id, { name: editName, currency: editCurrency });
-    setCurrentAccount(updated);
-    setAccounts(db.getAccounts());
+    if (!currentAccount || !sessionUser) return;
+    await db.updateAccount(currentAccount.id, { name: editName, currency: editCurrency }, sessionUser.uid);
     setIsSettingsOpen(false);
   };
 
-  const handleClearHistory = () => {
-    if (confirm("Are you sure you want to clear ALL transaction history for this business? This cannot be undone.")) {
-      db.clearTransactions(currentAccount.id);
-      setTransactions([]);
-      setStats(db.getStats(currentAccount.id, timeframe));
-      setIsSettingsOpen(false);
-    }
-  };
-
-  const handleDeleteAccount = () => {
+  const handleDeleteAccount = async () => {
     if (accounts.length <= 1) {
       alert("You must have at least one business ledger. Create a new one before deleting this one.");
       return;
     }
+    if (!currentAccount || !sessionUser) return;
     if (confirm(`Are you sure you want to delete "${currentAccount.name}" and all its data? This action is permanent.`)) {
-      const nextAcc = db.deleteAccount(currentAccount.id);
-      setAccounts(db.getAccounts());
-      switchAccount(nextAcc);
+      await db.deleteAccount(currentAccount.id);
+      const nextAcc = accounts.find(a => a.id !== currentAccount.id);
+      if (nextAcc) {
+          switchAccount(nextAcc);
+      }
       setIsSettingsOpen(false);
     }
   };
 
   const contextString = useMemo(() => {
+    if (!currentAccount) return "";
     return `Business: ${currentAccount.name}. Stats: Inflow ${stats.inflow}, Outflow ${stats.outflow}. Debt: ${stats.debt}. Recent tx: ${transactions.slice(0, 3).map(t => t.description).join(", ")}.`;
   }, [currentAccount, stats, transactions]);
 
@@ -183,7 +216,7 @@ const App: React.FC = () => {
     return list;
   }, [transactions, view, timeframe]);
 
-  if (authChecking) {
+  if (authChecking || loadingData) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
         <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
@@ -195,8 +228,16 @@ const App: React.FC = () => {
     return <LandingPage onStart={handleStart} />;
   }
 
-  if (!session) {
+  if (!sessionUser) {
     return <Auth />;
+  }
+
+  if (!currentAccount) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
+      </div>
+    );
   }
 
   return (
@@ -389,14 +430,6 @@ const App: React.FC = () => {
                     <div className="space-y-3">
                       <button 
                         type="button"
-                        onClick={handleClearHistory}
-                        className="w-full py-3 bg-white border border-rose-200 text-rose-600 rounded-xl font-bold text-sm flex items-center justify-center space-x-2 active:scale-95 transition-all shadow-sm"
-                      >
-                        <RefreshCcw className="w-4 h-4" />
-                        <span>Clear History</span>
-                      </button>
-                      <button 
-                        type="button"
                         onClick={handleDeleteAccount}
                         className="w-full py-3 bg-rose-600 text-white rounded-xl font-bold text-sm flex items-center justify-center space-x-2 active:scale-95 transition-all shadow-md shadow-rose-100"
                       >
@@ -412,8 +445,8 @@ const App: React.FC = () => {
                         <div>
                           <p className="text-xs font-bold text-indigo-900 mb-1">Account Info</p>
                           <p className="text-[11px] text-indigo-700/80 font-medium">
-                            {session 
-                              ? `Logged in as ${session.user.email}. All data is secured in your account.` 
+                            {sessionUser 
+                              ? `Logged in as ${sessionUser.email}. All data is secured in your account.` 
                               : "No session active."
                             }
                           </p>
